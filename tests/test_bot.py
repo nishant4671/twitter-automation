@@ -10,20 +10,22 @@ import bot
 
 # 1. Configuration & Environment Validation
 def test_missing_env_vars_raise_exception():
-    # Test missing GROQ_API_KEY using dry_run=True (skips Twitter credentials check)
+    # Test missing GROQ_API_KEY using dry_run=True (skips Twitter and Telegram credentials check)
     with patch.object(bot, 'GROQ_API_KEY', None):
         with pytest.raises(ValueError, match="Missing required environment variables: GROQ_API_KEY"):
             bot.validate_environment(dry_run=True)
 
-    # Test missing Twitter API credentials and Gemini key without dry_run
+    # Test missing Twitter/Telegram API credentials and Gemini key without dry_run
     with patch.object(bot, 'API_KEY', None), \
          patch.object(bot, 'API_SECRET_KEY', None), \
-         patch.object(bot, 'GEMINI_API_KEY', None):
+         patch.object(bot, 'GEMINI_API_KEY', None), \
+         patch.object(bot, 'TELEGRAM_BOT_TOKEN', None):
         with pytest.raises(ValueError) as excinfo:
             bot.validate_environment(dry_run=False)
         assert "API_KEY" in str(excinfo.value)
         assert "API_SECRET_KEY" in str(excinfo.value)
         assert "GEMINI_API_KEY" in str(excinfo.value)
+        assert "TELEGRAM_BOT_TOKEN" in str(excinfo.value)
 
 
 # 2. Payload Ingestion & Formatting
@@ -131,6 +133,56 @@ def test_log_and_commit_dry_run(mock_file, mock_datetime, mock_mkdir):
     handle.write.assert_called_once_with(
         "Commit ID: 12345abc\nProblem: Solve Two Sum\n\nTweet:\nCool tweet\n"
     )
+
+# Notifications & Error Handling
+@patch("bot.requests.post")
+def test_send_telegram_message_success(mock_post):
+    with patch.object(bot, 'TELEGRAM_BOT_TOKEN', 'test_token'), \
+         patch.object(bot, 'TELEGRAM_CHAT_ID', 'test_id'):
+        bot.send_telegram_message("Test message")
+        mock_post.assert_called_once()
+        args, kwargs = mock_post.call_args
+        assert args[0] == "https://api.telegram.org/bottest_token/sendMessage"
+        assert kwargs["json"] == {"chat_id": "test_id", "text": "Test message"}
+
+@patch("bot.send_telegram_message")
+@patch("bot.post_to_twitter")
+@patch("bot.generate_tweet_text")
+@patch("bot.fetch_latest_leetcode_commit")
+@patch("bot.validate_environment")
+@patch("bot.argparse.ArgumentParser.parse_args")
+def test_main_fatal_error_sends_telegram(mock_args, mock_validate, mock_fetch, mock_generate, mock_post, mock_telegram):
+    mock_args.return_value.dry_run = False
+    mock_fetch.return_value = {"sha": "123", "commit": {"message": "Test"}}
+    
+    # Force an exception during tweet generation
+    mock_generate.side_effect = Exception("Simulated fatal error")
+    
+    with pytest.raises(Exception, match="Simulated fatal error"):
+        bot.main()
+        
+    mock_telegram.assert_called_once_with("Fatal Error in Twitter Bot: Simulated fatal error")
+
+@patch("bot.send_telegram_message")
+@patch("bot.log_and_commit")
+@patch("bot.post_to_twitter")
+@patch("bot.generate_tweet_text")
+@patch("bot.fetch_latest_leetcode_commit")
+@patch("bot.is_already_posted")
+@patch("bot.validate_environment")
+@patch("bot.argparse.ArgumentParser.parse_args")
+def test_main_success_sends_telegram(mock_args, mock_validate, mock_is_posted, mock_fetch, mock_generate, mock_post, mock_log, mock_telegram):
+    mock_args.return_value.dry_run = False
+    mock_fetch.return_value = {"sha": "123", "commit": {"message": "Test Problem"}}
+    mock_is_posted.return_value = False
+    mock_generate.return_value = "Generated tweet"
+    
+    # Mock post_to_twitter to return a tweet ID
+    mock_post.return_value = "987654321"
+    
+    bot.main()
+    
+    mock_telegram.assert_called_once_with("Successfully posted Test Problem: https://x.com/user/status/987654321")
 
 
 # 5. CI/CD Pre-flight Check

@@ -25,6 +25,8 @@ ACCESS_TOKEN_SECRET = os.getenv("ACCESS_TOKEN_SECRET")
 GITHUB_USERNAME = os.getenv("GITHUB_USERNAME", "your_github_username")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 
 def fetch_latest_leetcode_commit():
@@ -122,16 +124,18 @@ def post_to_twitter(text):
         access_token_secret=ACCESS_TOKEN_SECRET
     )
     try:
-        client.create_tweet(text=text)
+        response = client.create_tweet(text=text)
         logger.info("Successfully posted tweet to Twitter.")
-        return True
+        return response.data['id']
     except tweepy.errors.TooManyRequests as e:
         logger.error(f"Rate limit exceeded (HTTP 429): {e}")
+        raise
     except tweepy.errors.Forbidden as e:
         logger.error(f"Forbidden (HTTP 403): {e}")
+        raise
     except Exception as e:
         logger.error(f"Failed to post tweet: {e}")
-    return False
+        raise
 
 
 def log_and_commit(commit_sha, commit_msg, tweet_text, dry_run=False):
@@ -171,11 +175,29 @@ def log_and_commit(commit_sha, commit_msg, tweet_text, dry_run=False):
         logger.error(f"Git operations failed: {e}")
 
 
+def send_telegram_message(text):
+    """Send a notification message via Telegram."""
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        logger.warning("Telegram credentials missing, skipping notification.")
+        return
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": text}
+    try:
+        response = requests.post(url, json=payload)
+        response.raise_for_status()
+        logger.info("Telegram notification sent successfully.")
+    except Exception as e:
+        logger.error(f"Failed to send Telegram notification: {e}")
+
+
 def validate_environment(dry_run=False):
     """Validate that required environment variables are present."""
     missing = []
     if not dry_run:
-        required_twitter = ['API_KEY', 'API_SECRET_KEY', 'ACCESS_TOKEN', 'ACCESS_TOKEN_SECRET']
+        required_twitter = [
+            'API_KEY', 'API_SECRET_KEY', 'ACCESS_TOKEN', 'ACCESS_TOKEN_SECRET',
+            'TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID'
+        ]
         for var in required_twitter:
             if not globals().get(var):
                 missing.append(var)
@@ -194,39 +216,46 @@ def main():
     parser.add_argument("--dry-run", action="store_true", help="Fetch and generate without posting or pushing changes")
     args = parser.parse_args()
 
-    # Configuration & Environment Validation
-    validate_environment(args.dry_run)
+    try:
+        # Configuration & Environment Validation
+        validate_environment(args.dry_run)
+                
+        # 1. Data Ingestion
+        logger.info("Fetching latest LeetCode commit...")
+        commit = fetch_latest_leetcode_commit()
+        if not commit:
+            logger.info("No commits found or API limit reached.")
+            return
             
-    # 1. Data Ingestion
-    logger.info("Fetching latest LeetCode commit...")
-    commit = fetch_latest_leetcode_commit()
-    if not commit:
-        logger.info("No commits found or API limit reached.")
-        return
+        commit_sha = commit['sha']
+        commit_msg = commit['commit']['message'].split('\n')[0]
         
-    commit_sha = commit['sha']
-    commit_msg = commit['commit']['message'].split('\n')[0]
-    
-    # 2. Duplicate Validation
-    if is_already_posted(commit_sha):
-        logger.info(f"Commit {commit_sha[:7]} is already present in the audit log. Exiting to prevent duplicate.")
-        return
+        # 2. Duplicate Validation
+        if is_already_posted(commit_sha):
+            logger.info(f"Commit {commit_sha[:7]} is already present in the audit log. Exiting to prevent duplicate.")
+            return
+            
+        logger.info(f"Found new commit: {commit_msg}")
         
-    logger.info(f"Found new commit: {commit_msg}")
-    
-    # 3. Dynamic Tweet Generation (LLM Fallback System)
-    tweet_text = generate_tweet_text(commit_msg)
-    
-    # 4. Local Testing Mode
-    if args.dry_run:
-        logger.info("\n--- [DRY RUN RESULTS] ---\n")
-        logger.info(f"Generated Tweet:\n{tweet_text}\n")
-        log_and_commit(commit_sha, commit_msg, tweet_text, dry_run=True)
-        return
+        # 3. Dynamic Tweet Generation (LLM Fallback System)
+        tweet_text = generate_tweet_text(commit_msg)
         
-    # 5. Production Execution
-    if post_to_twitter(tweet_text):
+        # 4. Local Testing Mode
+        if args.dry_run:
+            logger.info("\n--- [DRY RUN RESULTS] ---\n")
+            logger.info(f"Generated Tweet:\n{tweet_text}\n")
+            log_and_commit(commit_sha, commit_msg, tweet_text, dry_run=True)
+            return
+            
+        # 5. Production Execution
+        tweet_id = post_to_twitter(tweet_text)
         log_and_commit(commit_sha, commit_msg, tweet_text, dry_run=False)
+        send_telegram_message(f"Successfully posted {commit_msg}: https://x.com/user/status/{tweet_id}")
+        
+    except Exception as e:
+        logger.error(f"Pipeline failed: {e}")
+        send_telegram_message(f"Fatal Error in Twitter Bot: {str(e)}")
+        raise
 
 
 if __name__ == "__main__":
