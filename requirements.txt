@@ -1,0 +1,6 @@
+tweepy
+python-dotenv
+requests
+google-genai
+openai
+GitPython
