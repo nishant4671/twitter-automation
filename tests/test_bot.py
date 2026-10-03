@@ -11,7 +11,7 @@ import bot
 # 1. Configuration & Environment Validation
 def test_missing_env_vars_raise_exception():
     # Test missing GROQ_API_KEY using dry_run=True (skips Twitter and Telegram credentials check)
-    with patch.object(bot, 'GROQ_API_KEY', None):
+    with patch.object(bot, 'GROQ_API_KEY', None), patch.object(bot, 'LEETCODE_REPO_NAME', 'repo'):
         with pytest.raises(ValueError, match="Missing required environment variables: GROQ_API_KEY"):
             bot.validate_environment(dry_run=True)
 
@@ -19,13 +19,15 @@ def test_missing_env_vars_raise_exception():
     with patch.object(bot, 'API_KEY', None), \
          patch.object(bot, 'API_SECRET_KEY', None), \
          patch.object(bot, 'GEMINI_API_KEY', None), \
-         patch.object(bot, 'TELEGRAM_BOT_TOKEN', None):
+         patch.object(bot, 'TELEGRAM_BOT_TOKEN', None), \
+         patch.object(bot, 'LEETCODE_REPO_NAME', None):
         with pytest.raises(ValueError) as excinfo:
             bot.validate_environment(dry_run=False)
         assert "API_KEY" in str(excinfo.value)
         assert "API_SECRET_KEY" in str(excinfo.value)
         assert "GEMINI_API_KEY" in str(excinfo.value)
         assert "TELEGRAM_BOT_TOKEN" in str(excinfo.value)
+        assert "LEETCODE_REPO_NAME" in str(excinfo.value)
 
 
 # 2. Payload Ingestion & Formatting
@@ -48,17 +50,18 @@ def test_fetch_latest_leetcode_commit_empty(mock_get):
     mock_response.json.return_value = []
     mock_get.return_value = mock_response
 
-    commit = bot.fetch_latest_leetcode_commit()
-    assert commit is None
+    with pytest.raises(ValueError, match="No commits found in the specified repository."):
+        bot.fetch_latest_leetcode_commit()
 
 @patch("bot.requests.get")
 def test_fetch_latest_leetcode_commit_rate_limited(mock_get):
     mock_response = MagicMock()
     mock_response.status_code = 403
+    mock_response.text = "Forbidden"
     mock_get.return_value = mock_response
 
-    commit = bot.fetch_latest_leetcode_commit()
-    assert commit is None
+    with pytest.raises(Exception, match="GitHub API Error: 403 - Forbidden"):
+        bot.fetch_latest_leetcode_commit()
 
 
 # 3. LLM Fallback & Resilience

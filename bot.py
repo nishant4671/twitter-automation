@@ -23,6 +23,7 @@ API_SECRET_KEY = os.getenv("API_SECRET_KEY")
 ACCESS_TOKEN = os.getenv("ACCESS_TOKEN")
 ACCESS_TOKEN_SECRET = os.getenv("ACCESS_TOKEN_SECRET")
 GITHUB_USERNAME = os.getenv("GITHUB_USERNAME", "your_github_username")
+LEETCODE_REPO_NAME = os.getenv("LEETCODE_REPO_NAME")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -30,15 +31,17 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 
 def fetch_latest_leetcode_commit():
-    """Fetch the most recent commit exclusively from the user's LeetCode repository."""
-    url = f"https://api.github.com/repos/{GITHUB_USERNAME}/leetcode/commits"
+    """Fetch the most recent commit exclusively from the configured LeetCode repository."""
+    url = f"https://api.github.com/repos/{GITHUB_USERNAME}/{LEETCODE_REPO_NAME}/commits"
     response = requests.get(url)
-    if response.status_code == 200:
-        commits = response.json()
-        if commits:
-            return commits[0]
-    logger.error(f"Failed to fetch commits from LeetCode repo: HTTP {response.status_code}")
-    return None
+    if response.status_code != 200:
+        raise Exception(f"GitHub API Error: {response.status_code} - {response.text}")
+    
+    commits = response.json()
+    if not commits:
+        raise ValueError("No commits found in the specified repository.")
+        
+    return commits[0]
 
 
 def is_already_posted(commit_sha):
@@ -206,6 +209,8 @@ def validate_environment(dry_run=False):
         missing.append('GEMINI_API_KEY')
     if not GROQ_API_KEY:
         missing.append('GROQ_API_KEY')
+    if not LEETCODE_REPO_NAME:
+        missing.append('LEETCODE_REPO_NAME')
         
     if missing:
         raise ValueError(f"Missing required environment variables: {', '.join(missing)}")
@@ -223,9 +228,6 @@ def main():
         # 1. Data Ingestion
         logger.info("Fetching latest LeetCode commit...")
         commit = fetch_latest_leetcode_commit()
-        if not commit:
-            logger.info("No commits found or API limit reached.")
-            return
             
         commit_sha = commit['sha']
         commit_msg = commit['commit']['message'].split('\n')[0]
