@@ -24,6 +24,7 @@ ACCESS_TOKEN = os.getenv("ACCESS_TOKEN")
 ACCESS_TOKEN_SECRET = os.getenv("ACCESS_TOKEN_SECRET")
 GITHUB_USERNAME = os.getenv("GITHUB_USERNAME", "your_github_username")
 LEETCODE_REPO_NAME = os.getenv("LEETCODE_REPO_NAME")
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -33,7 +34,11 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 def fetch_latest_leetcode_commit():
     """Fetch the most recent commit exclusively from the configured LeetCode repository."""
     url = f"https://api.github.com/repos/{GITHUB_USERNAME}/{LEETCODE_REPO_NAME}/commits"
-    response = requests.get(url)
+    headers = {}
+    if GITHUB_TOKEN:
+        headers['Authorization'] = f'token {GITHUB_TOKEN}'
+        
+    response = requests.get(url, headers=headers)
     if response.status_code != 200:
         raise Exception(f"GitHub API Error: {response.status_code} - {response.text}")
     
@@ -41,7 +46,13 @@ def fetch_latest_leetcode_commit():
     if not commits:
         raise ValueError("No commits found in the specified repository.")
         
-    return commits[0]
+    keywords = ["auto-solved", "time:", "space:", "leetcode"]
+    for commit in commits:
+        msg = commit['commit']['message'].lower()
+        if any(kw in msg for kw in keywords):
+            return commit
+            
+    raise ValueError("No LeetCode solution commits found in the recent history.")
 
 
 def is_already_posted(commit_sha):
@@ -63,15 +74,16 @@ def is_already_posted(commit_sha):
     return False
 
 
-def generate_tweet_text(commit_msg):
+def generate_tweet_text(commit_msg, commit_sha):
     """
     Generate a tweet update under 280 characters with no emojis using Gemini,
-    with an automated fallback to Grok.
+    with an automated fallback to Groq.
     """
     prompt = (
         f"Take the following raw LeetCode commit message: '{commit_msg}'. "
         f"Synthesize a short, engaging tech update under 280 characters "
-        f"without using emojis. Return only the tweet text."
+        f"without using emojis. Output ONLY the raw tweet text. Do not wrap in quotes or markdown. "
+        f"You MUST include the text [Hash: {commit_sha[:7]}] at the end of the tweet to ensure uniqueness."
     )
     
     # 1. Primary Attempt: Gemini API
@@ -240,7 +252,10 @@ def main():
         logger.info(f"Found new commit: {commit_msg}")
         
         # 3. Dynamic Tweet Generation (LLM Fallback System)
-        tweet_text = generate_tweet_text(commit_msg)
+        tweet_text = generate_tweet_text(commit_msg, commit_sha)
+        
+        # Output Sanitization
+        tweet_text = tweet_text.replace('"', '').replace('`', '').strip()[:280]
         
         # 4. Local Testing Mode
         if args.dry_run:

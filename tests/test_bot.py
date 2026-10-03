@@ -35,13 +35,28 @@ def test_missing_env_vars_raise_exception():
 def test_fetch_latest_leetcode_commit_success(mock_get):
     mock_response = MagicMock()
     mock_response.status_code = 200
-    mock_response.json.return_value = [{"sha": "12345abc", "commit": {"message": "Solve Two Sum"}}]
+    mock_response.json.return_value = [
+        {"sha": "0000000", "commit": {"message": "Update README.md"}},
+        {"sha": "12345abc", "commit": {"message": "LeetCode: Two Sum"}}
+    ]
     mock_get.return_value = mock_response
 
     commit = bot.fetch_latest_leetcode_commit()
     assert commit is not None
     assert commit["sha"] == "12345abc"
-    assert commit["commit"]["message"] == "Solve Two Sum"
+    assert commit["commit"]["message"] == "LeetCode: Two Sum"
+
+@patch("bot.requests.get")
+def test_fetch_latest_leetcode_commit_no_leetcode(mock_get):
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = [
+        {"sha": "0000000", "commit": {"message": "Update README.md"}}
+    ]
+    mock_get.return_value = mock_response
+
+    with pytest.raises(ValueError, match="No LeetCode solution commits found in the recent history."):
+        bot.fetch_latest_leetcode_commit()
 
 @patch("bot.requests.get")
 def test_fetch_latest_leetcode_commit_empty(mock_get):
@@ -72,7 +87,7 @@ def test_generate_tweet_gemini_success(mock_openai, mock_genai):
     mock_genai.return_value = mock_genai_client
     mock_genai_client.models.generate_content.return_value.text = "This is a short tech update."
 
-    tweet = bot.generate_tweet_text("Solve Two Sum")
+    tweet = bot.generate_tweet_text("Solve Two Sum", "12345abc")
     assert tweet == "This is a short tech update."
     mock_openai.assert_not_called()
 
@@ -88,7 +103,7 @@ def test_generate_tweet_fallback_to_groq(mock_openai, mock_genai):
     mock_openai.return_value = mock_groq_client
     mock_groq_client.chat.completions.create.return_value.choices[0].message.content = "Groq generated update."
 
-    tweet = bot.generate_tweet_text("Solve Two Sum")
+    tweet = bot.generate_tweet_text("Solve Two Sum", "12345abc")
     assert tweet == "Groq generated update."
     mock_openai.assert_called_once()
     mock_groq_client.chat.completions.create.assert_called_once()
@@ -102,7 +117,7 @@ def test_generate_tweet_trim_exceeding_length(mock_genai):
     long_tweet = "A" * 300
     mock_genai_client.models.generate_content.return_value.text = long_tweet
 
-    tweet = bot.generate_tweet_text("Solve Two Sum")
+    tweet = bot.generate_tweet_text("Solve Two Sum", "12345abc")
     assert len(tweet) <= 280
     assert tweet.endswith("...")
     assert tweet == ("A" * 277) + "..."
