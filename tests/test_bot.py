@@ -8,6 +8,13 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import bot
 
 
+@pytest.fixture(autouse=True)
+def mock_time_sleep():
+    """Autouse fixture to mock sleep so tenacity retries run instantaneously."""
+    with patch("time.sleep") as m:
+        yield m
+
+
 # 1. Configuration & Environment Validation
 def test_missing_env_vars_raise_exception():
     # Test missing GROQ_API_KEY using dry_run=True (skips Twitter and Telegram credentials check)
@@ -18,6 +25,8 @@ def test_missing_env_vars_raise_exception():
     # Test missing Twitter/Telegram API credentials and Gemini key without dry_run
     with patch.object(bot, 'API_KEY', None), \
          patch.object(bot, 'API_SECRET_KEY', None), \
+         patch.object(bot, 'ACCESS_TOKEN', None), \
+         patch.object(bot, 'ACCESS_TOKEN_SECRET', None), \
          patch.object(bot, 'GEMINI_API_KEY', None), \
          patch.object(bot, 'TELEGRAM_BOT_TOKEN', None), \
          patch.object(bot, 'LEETCODE_REPO_NAME', None):
@@ -152,7 +161,8 @@ def test_log_and_commit_dry_run(mock_file, mock_datetime, mock_mkdir):
         "Commit ID: 12345abc\nProblem: Solve Two Sum\n\nTweet:\nCool tweet\n"
     )
 
-# Notifications & Error Handling
+
+# 5. Notifications & Error Handling
 @patch("bot.requests.post")
 def test_send_telegram_message_success(mock_post):
     with patch.object(bot, 'TELEGRAM_BOT_TOKEN', 'test_token'), \
@@ -203,7 +213,7 @@ def test_main_success_sends_telegram(mock_args, mock_validate, mock_is_posted, m
     mock_telegram.assert_called_once_with("Successfully posted Test Problem: https://x.com/user/status/987654321")
 
 
-# 5. CI/CD Pre-flight Check
+# 6. CI/CD Pre-flight Check
 def test_ci_cd_workflow_git_config():
     workflow_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".github", "workflows", "twitter_bot.yml")
     assert os.path.exists(workflow_path), f"Workflow file does not exist at {workflow_path}"
@@ -211,3 +221,62 @@ def test_ci_cd_workflow_git_config():
         content = f.read()
         assert 'git config --global user.name "github-actions[bot]"' in content
         assert 'git config --global user.email "github-actions[bot]@users.noreply.github.com"' in content
+
+
+# 7. Transient Error Resilience & Git Push Race Conditions
+@patch("bot.requests.get")
+def test_fetch_latest_leetcode_commit_retry_success(mock_get, mock_time_sleep):
+    """Test mocking an API throwing an exception twice but succeeding on the third try."""
+    mock_success_response = MagicMock()
+    mock_success_response.status_code = 200
+    mock_success_response.json.return_value = [
+        {"sha": "retry12345", "commit": {"message": "LeetCode: Retry Problem Solved"}}
+    ]
+    
+    mock_get.side_effect = [
+        Exception("Transient network timeout"),
+        Exception("GitHub API 500 Internal Error"),
+        mock_success_response
+    ]
+
+    commit = bot.fetch_latest_leetcode_commit()
+    assert commit is not None
+    assert commit["sha"] == "retry12345"
+    assert commit["commit"]["message"] == "LeetCode: Retry Problem Solved"
+    assert mock_get.call_count == 3
+    assert mock_time_sleep.call_count == 2
+
+
+@patch("bot.tweepy.Client")
+def test_post_to_twitter_retry_success(mock_tweepy_client, mock_time_sleep):
+    """Test Twitter API retry logic when initial calls throw transient exceptions."""
+    mock_client_instance = MagicMock()
+    mock_tweepy_client.return_value = mock_client_instance
+    mock_response = MagicMock()
+    mock_response.data = {'id': 'tweet_retry_success_123'}
+
+    mock_client_instance.create_tweet.side_effect = [
+        Exception("Twitter API Timeout 1"),
+        Exception("Twitter API Timeout 2"),
+        mock_response
+    ]
+
+    tweet_id = bot.post_to_twitter("Resilience test tweet")
+    assert tweet_id == "tweet_retry_success_123"
+    assert mock_client_instance.create_tweet.call_count == 3
+    assert mock_time_sleep.call_count == 2
+
+
+@patch("bot.Repo")
+@patch("bot.Path.mkdir")
+@patch("bot.datetime")
+@patch("builtins.open", new_callable=mock_open)
+def test_log_and_commit_pull_rebase_before_push(mock_file, mock_datetime, mock_mkdir, mock_repo_class):
+    """Test that git pull --rebase is executed immediately before git push to prevent race conditions."""
+    mock_repo = MagicMock()
+    mock_repo_class.return_value = mock_repo
+    
+    bot.log_and_commit("12345abc", "Solve Two Sum", "Cool tweet", dry_run=False)
+    
+    mock_repo.git.pull.assert_called_once_with('--rebase', 'origin', 'main')
+    mock_repo.remotes.origin.push.assert_called_once()

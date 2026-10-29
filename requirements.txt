@@ -4,3 +4,4 @@ requests
 google-genai
 openai
 GitPython
+tenacity

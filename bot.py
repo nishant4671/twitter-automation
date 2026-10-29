@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 from git import Repo
 from google import genai
 from openai import OpenAI
+from tenacity import retry, stop_after_attempt, wait_exponential
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -31,6 +32,7 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10), reraise=True)
 def fetch_latest_leetcode_commit():
     """Fetch the most recent commit exclusively from the configured LeetCode repository."""
     url = f"https://api.github.com/repos/{GITHUB_USERNAME}/{LEETCODE_REPO_NAME}/commits"
@@ -74,6 +76,7 @@ def is_already_posted(commit_sha):
     return False
 
 
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10), reraise=True)
 def generate_tweet_text(commit_msg, commit_sha):
     """
     Generate a tweet update under 280 characters with no emojis using Gemini,
@@ -130,6 +133,7 @@ def generate_tweet_text(commit_msg, commit_sha):
     return f"Solved a new problem on LeetCode: {commit_msg}"[:280]
 
 
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10), reraise=True)
 def post_to_twitter(text):
     """Post text to Twitter API v2 Free Tier."""
     client = tweepy.Client(
@@ -182,12 +186,13 @@ def log_and_commit(commit_sha, commit_msg, tweet_text, dry_run=False):
         repo.index.commit(f"docs: log automated tweet for commit {commit_sha[:7]}")
         logger.info("Created local Git commit for log entry.")
         
-        # Push to remote (requires proper Git config/authentication)
-        origin = repo.remote(name='origin')
-        origin.push()
+        # Pull latest changes with rebase to prevent race conditions and merge conflicts
+        repo.git.pull('--rebase', 'origin', 'main')
+        repo.remotes.origin.push()
         logger.info("Successfully pushed Git log back to remote repository.")
     except Exception as e:
         logger.error(f"Git operations failed: {e}")
+        raise
 
 
 def send_telegram_message(text):
