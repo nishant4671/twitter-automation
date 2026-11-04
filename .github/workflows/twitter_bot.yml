@@ -42,7 +42,7 @@ jobs:
         ACCESS_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         ACCESS_TOKEN_SECRET: ${{ secrets.ACCESS_TOKEN_SECRET }}
         GITHUB_USERNAME: ${{ secrets.GITHUB_USERNAME }}
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        
         LEETCODE_REPO_NAME: ${{ secrets.LEETCODE_REPO_NAME }}
         GITHUB_TOKEN: ${{ secrets.GH_PAT }}
         GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
