@@ -1,9 +1,9 @@
 name: Twitter Automation Pipeline
 
 on:
-  schedule:
-    - cron: '0 10 * * *' # Run daily at 10:00 UTC
-  workflow_dispatch: # Enable manual execution
+  repository_dispatch:
+    types: [leetcode-solved]
+  workflow_dispatch:
 
 jobs:
   run-bot:
